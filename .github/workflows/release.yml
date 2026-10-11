@@ -17,12 +17,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify VERSION matches tag
+      - name: Verify version matches tag
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          file="$(cat VERSION)"
+          file="$(cat version)"
           if [ "$tag" != "$file" ]; then
-            echo "Tag $tag does not match VERSION $file" >&2
+            echo "Tag $tag does not match version $file" >&2
             exit 1
           fi
 
