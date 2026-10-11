@@ -1,0 +1,4 @@
+# Follow sourced files relative to the script
+source-path=SCRIPTDIR
+# We intentionally use unquoted $args for word splitting (SC2086 suppressed inline)
+disable=SC1091

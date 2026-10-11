@@ -1,0 +1,28 @@
+# Maintainer: Tamas Vince <hi@vnce.eu>
+pkgname=ryzenadj-ppd
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Bridge power-profiles-daemon profile changes to ryzenadj power limits"
+arch=('any')
+url="https://github.com/nemvince/ryzenadj-ppd"
+license=('MIT')
+depends=('bash' 'systemd' 'dbus' 'ryzenadj')
+makedepends=('shellcheck' 'shfmt')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    make lint
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    make install \
+        DESTDIR="$pkgdir" \
+        PREFIX=/usr \
+        SYSTEMD_DIR=/usr/lib/systemd/system \
+        SYSCONFDIR=/etc
+}
+
+# vim:set ts=2 sw=2 et:

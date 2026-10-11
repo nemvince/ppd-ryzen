@@ -1,0 +1,33 @@
+[tools]
+shellcheck = "latest"
+shfmt = "latest"
+
+[env]
+_.path = ["{{config_root}}/bin", "{{config_root}}/scripts"]
+
+[tasks.lint]
+description = "Run shellcheck and shfmt on all scripts"
+run = """
+shellcheck bin/ryzenadj-ppd scripts/*.sh tests/*.sh
+shfmt -d -i 4 -ci bin/ryzenadj-ppd scripts/*.sh tests/*.sh
+"""
+
+[tasks.test]
+description = "Run smoke tests (does not require root or ryzenadj)"
+run = "./tests/smoke.sh"
+
+[tasks.install]
+description = "Install ryzenadj-ppd (requires sudo)"
+run = "sudo ./scripts/install.sh"
+
+[tasks.uninstall]
+description = "Uninstall ryzenadj-ppd (requires sudo)"
+run = "sudo ./scripts/uninstall.sh"
+
+[tasks.package]
+description = "Build a distributable tarball in dist/"
+run = "./scripts/build-package.sh"
+
+[tasks.ci]
+description = "Run the full CI pipeline: lint, test, package"
+depends = ["lint", "test", "package"]

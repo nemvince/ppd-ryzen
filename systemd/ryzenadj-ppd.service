@@ -1,0 +1,31 @@
+[Unit]
+Description=RyzenAdj <-> Power Profiles Daemon bridge
+Documentation=https://github.com/YOURUSER/ryzenadj-ppd
+After=power-profiles-daemon.service multi-user.target
+Wants=power-profiles-daemon.service
+ConditionPathExists=/sys/devices/system/cpu/amd_pstate
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ryzenadj-ppd
+Restart=always
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_SYS_RAWIO
+AmbientCapabilities=CAP_SYS_RAWIO
+
+[Install]
+WantedBy=multi-user.target

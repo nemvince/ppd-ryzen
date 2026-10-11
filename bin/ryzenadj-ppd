@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#
+# ryzenadj-ppd
+#
+# Bridges power-profiles-daemon profile changes to ryzenadj power limits.
+#
+
+set -euo pipefail
+
+version="1.0.0"
+
+CONFIG_FILE="${RYZENADJ_PPD_CONFIG:-/etc/ryzenadj-ppd.conf}"
+RYZENADJ_BIN="${RYZENADJ_BIN:-/usr/bin/ryzenadj}"
+
+PPD_DEST="net.hadess.PowerProfiles"
+PPD_PATH="/net/hadess/PowerProfiles"
+PPD_IFACE="net.hadess.PowerProfiles"
+
+# --- Defaults (override via $CONFIG_FILE) ------------------------------------
+POWER_SAVER_ARGS="--stapm-limit=15000 --fast-limit=20000 --slow-limit=15000 --tctl-temp=80"
+BALANCED_ARGS="--stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=85"
+PERFORMANCE_ARGS="--stapm-limit=30000 --fast-limit=35000 --slow-limit=30000 --tctl-temp=90"
+
+if [[ -r "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+# -----------------------------------------------------------------------------
+
+log() { printf '[ryzenadj-ppd] %s\n' "$*" >&2; }
+die() {
+    log "ERROR: $*"
+    exit 1
+}
+
+usage() {
+    cat <<EOF
+ryzenadj-ppd $version
+
+Usage:
+  ryzenadj-ppd          Run as a daemon (for systemd)
+  ryzenadj-ppd --once   Apply the current PPD profile once and exit
+  ryzenadj-ppd --version
+  ryzenadj-ppd --help
+
+Environment:
+  RYZENADJ_PPD_CONFIG   Path to config file (default: /etc/ryzenadj-ppd.conf)
+  RYZENADJ_BIN          Path to ryzenadj binary (default: /usr/bin/ryzenadj)
+EOF
+}
+
+get_args_for_profile() {
+    case "$1" in
+        power-saver) printf '%s' "$POWER_SAVER_ARGS" ;;
+        balanced) printf '%s' "$BALANCED_ARGS" ;;
+        performance) printf '%s' "$PERFORMANCE_ARGS" ;;
+        *) return 1 ;;
+    esac
+}
+
+get_active_profile() {
+    local raw
+    raw=$(busctl --system get-property \
+        "$PPD_DEST" "$PPD_PATH" "$PPD_IFACE" ActiveProfile 2>/dev/null) || return 1
+    printf '%s' "$raw" | sed -n 's/^[[:space:]]*s[[:space:]]*"\(.*\)"$/\1/p'
+}
+
+apply_profile() {
+    local profile="$1" args
+    if ! args=$(get_args_for_profile "$profile"); then
+        log "Unknown profile '$profile' — skipping"
+        return 0
+    fi
+    log "Applying '$profile': ryzenadj $args"
+    # shellcheck disable=SC2086
+    if ! "$RYZENADJ_BIN" $args; then
+        log "ryzenadj failed for profile '$profile'"
+        return 1
+    fi
+}
+
+apply_active_profile() {
+    local profile
+    if ! profile=$(get_active_profile); then
+        log "Could not read active PPD profile"
+        return 1
+    fi
+    apply_profile "$profile"
+}
+
+wait_for_ppd() {
+    local retries=0
+    until busctl --system status "$PPD_DEST" >/dev/null 2>&1; do
+        sleep 1
+        retries=$((retries + 1))
+        ((retries > 60)) && die "PPD not on the system bus after 60s"
+    done
+}
+
+monitor() {
+    log "Monitoring PPD for profile changes..."
+    stdbuf -oL dbus-monitor --system \
+        "type='signal',sender='$PPD_DEST',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'" |
+        while IFS= read -r line; do
+            if [[ "$line" == *"member=PropertiesChanged"* ]]; then
+                apply_active_profile || true
+            fi
+        done
+}
+
+main() {
+    case "${1:-}" in
+        --version)
+            printf '%s\n' "$version"
+            exit 0
+            ;;
+        --help | -h)
+            usage
+            exit 0
+            ;;
+    esac
+
+    [[ -x "$RYZENADJ_BIN" ]] || die "ryzenadj not found at $RYZENADJ_BIN"
+
+    case "${1:-}" in
+        --once) apply_active_profile ;;
+        "")
+            wait_for_ppd
+            apply_active_profile || true
+            monitor
+            ;;
+        *) die "Unknown argument: $1 (try --help)" ;;
+    esac
+}
+
+main "$@"

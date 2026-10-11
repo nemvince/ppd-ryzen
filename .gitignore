@@ -1,0 +1,6 @@
+dist/
+*.tar.gz
+*.tar.gz.sha256
+*.deb
+*.rpm
+*.pkg.tar.zst

@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify VERSION matches tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(cat VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "Tag $tag does not match VERSION $file" >&2
+            exit 1
+          fi
+
+      - name: Install mise (and tools from mise.toml)
+        uses: jdx/mise-action@v5
+        with:
+          install: true
+          cache: true
+
+      - name: Lint
+        run: mise run lint
+
+      - name: Smoke tests
+        run: mise run test
+
+      - name: Build tarball
+        run: mise run package
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          awk -v ver="$GITHUB_REF_NAME" '
+            $0 ~ "^## \\[" ver "\\]" { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "No changelog entry for $GITHUB_REF_NAME" > release_notes.md
+          fi
+          echo "----- release notes -----"
+          cat release_notes.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: release_notes.md
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: false
