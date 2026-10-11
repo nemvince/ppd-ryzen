@@ -1,171 +1,118 @@
-# tuned-ryzenadj
+# ryzenadj-ppd-bridge
 
-Bridge [tuned](https://github.com/redhat-performance/tuned) /
-[power-profiles-daemon](https://gitlab.freedesktop.org/upower/power-profiles-daemon)
-profile changes to [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) power limits
-on AMD laptops.
+Bridges `power-profiles-daemon` profile switches to `ryzenadj` power limits on AMD laptops. Built and tested on a ThinkPad T14s Gen 2a with a Ryzen 7 5850U.
 
-Switch between *power-saver*, *balanced*, and *performance* in your desktop
-environment's power menu and have your STAPM / PPT / Tctl limits follow along
-automatically.
+Run `powerprofilesctl set balanced`, or flip the toggle in your DE, and your STAPM, fast/slow limit and tctl settings get re-applied with it. No `sudo ryzenadj` by hand anymore.
 
-## Why
+## The problem it solves
 
-`power-profiles-daemon` (PPD) on CachyOS and other Arch-based distros is known
-to fail on AMD APUs with:
+`power-profiles-daemon` has no hook for running something on a profile change. This daemon watches the D-Bus `PropertiesChanged` signal instead, reads the new `ActiveProfile`, and fires off the matching `ryzenadj` command.
 
-```
-Failed to activate CPU driver 'amd_pstate': Error writing
-'/sys/devices/system/cpu/cpufreq/policy11/boost': Invalid argument (13)
-```
+The symptom it was written for: a 5850U under sustained load sinking to its 1.9 GHz base clock because the STAPM budget ran dry.
 
-Switching to `tuned` + `tuned-ppd` (PPD compatibility layer) fixes the D-Bus
-error. This project adds the next layer: making `ryzenadj` limits follow the
-active profile.
+## What it does
+
+- Three profiles, `power-saver`, `balanced` and `performance`, each with its own `ryzenadj` argument set.
+- Lives in `/etc/ryzenadj-ppd.conf`, so changing limits does not need a rebuild.
+- `--once` runs a single pass and exits, for testing without the daemon.
+- The systemd unit is locked down: no new privileges, strict filesystem paths, minimal capability set.
+- Ships sane defaults for three T14s Gen 2a use cases.
 
 ## Requirements
 
-- Linux with kernel `amd_pstate` support (5.17+)
-- [`ryzenadj`](https://github.com/FlyGoat/RyzenAdj) (AUR: `ryzenadj`)
-- `tuned` and `tuned-ppd` (packages: `tuned tuned-ppd` on Arch / CachyOS)
-- Root access for installation
-
-Tested on: **ThinkPad T14s Gen 2a**, Ryzen 7 5850U, CachyOS.
+- Linux with `power-profiles-daemon`. TLP does not work here, see the warning below.
+- `ryzenadj` on PATH, expected at `/usr/bin/ryzenadj`.
+- systemd and dbus.
+- An AMD CPU that both `ryzenadj` and `amd-pstate` support.
 
 ## Install
 
-### AUR
+Arch, CachyOS, Manjaro:
 
 ```bash
-yay -S tuned-ryzenadj
-sudo systemctl enable --now tuned tuned-ppd
+yay -S ryzenadj-ppd-bridge
 ```
 
-### From source (any distro with `make`)
+From the release tarball:
 
 ```bash
-git clone https://github.com/<you>/tuned-ryzenadj.git
-cd tuned-ryzenadj
-sudo ./install.sh
+tar -xzf ryzenadj-ppd-bridge-*.tar.gz
+cd ryzenadj-ppd-bridge-*
+sudo ./scripts/install.sh
 ```
 
-The installer will:
-
-1. Copy files into `/usr/lib/ryzenadj-tuned/`, `/etc/tuned/profiles/`, and
-   `/etc/tuned/`.
-2. Create `/etc/tuned/ryzenadj-limits.conf` from the packaged defaults
-   (never overwrites an existing file).
-3. Mask `power-profiles-daemon.service` and enable `tuned` + `tuned-ppd`.
-4. Reload `tuned-ppd`.
-
-Pass `--destdir <dir>` for packaging. Pass `--no-services` to skip the
-systemd handling.
-
-### Manual
+From source:
 
 ```bash
+git clone https://github.com/YOURUSER/ryzenadj-ppd-bridge
+cd ryzenadj-ppd-bridge
 sudo make install
-sudo systemctl mask --now power-profiles-daemon.service
-sudo systemctl enable --now tuned tuned-ppd
 ```
 
-## Configuration
+## Configure
 
-Edit **`/etc/tuned/ryzenadj-limits.conf`** to change the limits for each
-profile:
+Edit `/etc/ryzenadj-ppd.conf`:
 
 ```bash
-RYZENADJ_POWERSAVE_ARGS="--stapm-limit=15000 --fast-limit=20000 --slow-limit=15000 --tctl-temp=80"
-RYZENADJ_BALANCED_ARGS="--stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=85"
-RYZENADJ_PERFORMANCE_ARGS="--stapm-limit=30000 --fast-limit=35000 --slow-limit=30000 --tctl-temp=90"
+POWER_SAVER_ARGS="--stapm-limit=15000 --fast-limit=20000 --slow-limit=15000 --tctl-temp=80"
+BALANCED_ARGS="--stapm-limit=25000 --fast-limit=30000 --slow-limit=25000 --tctl-temp=85"
+PERFORMANCE_ARGS="--stapm-limit=30000 --fast-limit=35000 --slow-limit=30000 --tctl-temp=90"
 ```
 
-Changes take effect on the next profile activation. To re-apply immediately:
+Then:
 
 ```bash
-sudo tuned-adm profile ryzenadj-balanced
+sudo systemctl restart ryzenadj-ppd.service
 ```
 
-### Mapping PPD names → tuned profiles
-
-`tuned-ppd` reads `/etc/tuned/ppd.conf` for the mapping. The installer drops a
-sample in; verify the format against your `tuned-ppd` version if the mapping
-doesn't take effect.
-
-```ini
-[profiles]
-power-saver=ryzenadj-powersave
-balanced=ryzenadj-balanced
-performance=ryzenadj-performance
-```
-
-### Applying profiles
-
-Either of these works:
+## Enable
 
 ```bash
-# Via PPD compatibility layer
-powerprofilesctl set balanced
-
-# Or directly via tuned
-sudo tuned-adm profile ryzenadj-performance
+sudo systemctl enable --now ryzenadj-ppd.service
 ```
 
-## Optional: re-apply on resume
-
-The `[script]` plugin runs `apply.sh` only when a profile is *loaded*. If your
-limits reset after suspend/resume on your firmware, enable the polling service:
+Watch it work:
 
 ```bash
-sudo systemctl enable --now ryzenadj-tuned-poll.service
+journalctl -u ryzenadj-ppd.service -f
+# other terminal:
+powerprofilesctl set performance
 ```
 
-It re-applies the active profile's limits every 15 seconds — cheap, and it
-catches any external overwrite.
+The log should show the new profile and the `ryzenadj` command it ran.
 
-## Verifying
+## Testing without the service
 
 ```bash
-# Current profile
-tuned-adm active
-
-# Actual limits
-sudo ryzenadj --info | grep -Ei 'stapm|ppt|tctl'
-
-# Service logs
-journalctl -u tuned -u tuned-ppd -u ryzenadj-tuned-poll -f
+sudo /usr/local/bin/ryzenadj-ppd-bridge --once
 ```
 
 ## Uninstall
 
 ```bash
-sudo ./uninstall.sh
+sudo ./scripts/uninstall.sh
+# or from a checkout:
+sudo make uninstall
 ```
 
-Keeps `/etc/tuned/ryzenadj-limits.conf` unless `--purge` is passed.
+`/etc/ryzenadj-ppd.conf` survives an uninstall.
 
-## Troubleshooting
+## Not compatible with TLP
 
-**`powerprofilesctl` still errors about `amd_pstate`**
-Make sure `power-profiles-daemon.service` is masked:
+`power-profiles-daemon` and TLP both own power management and will fight. Pick one. On TLP, drop PPD and use its `RUNTIME_PM_*` and `CPU_*` variables instead.
+
+## The 25 W firmware ceiling on the 5850U
+
+Some 5850U laptops clamp STAPM at 25 W in firmware no matter what `ryzenadj` asks for. If `--stapm-limit` above 25000 changes nothing, push sustained power through `--slow-limit` instead.
+
+## Development
 
 ```bash
-systemctl status power-profiles-daemon.service
+make lint      # shellcheck + shfmt
+make test      # smoke tests, no root needed
+make package   # builds dist/*.tar.gz
 ```
-
-**Profile changes but limits don't**
-Check `journalctl -u tuned -f` while switching profiles. If `apply.sh` isn't
-running, verify the profile was installed:
-
-```bash
-ls /etc/tuned/profiles/ryzenadj-*/
-tuned-adm profile_info ryzenadj-balanced
-```
-
-**Ryzen 7 5850U clamps at 25W STAPM**
-Known firmware behaviour on some Cezanne parts. Use `--slow-limit` instead of
-`--stapm-limit` to push sustained power.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
